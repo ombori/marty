@@ -120,23 +120,192 @@ WISE_PROFILE_OMB_OPERATIONS=52329081
 
 ---
 
-## API Endpoints Used
+## API Endpoints
 
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /v1/profiles` | Get profile ID |
-| `GET /v4/profiles/{profileId}/balances?types=STANDARD` | Get all currency balances |
-| `GET /v1/profiles/{profileId}/balance-statements/{balanceId}/statement` | Get transactions for a balance |
+| Endpoint | Purpose | SCA Required |
+|----------|---------|--------------|
+| `GET /v2/profiles` | List all profiles for user | No |
+| `GET /v4/profiles/{profileId}/balances?types=STANDARD` | Get all currency balances | No |
+| `GET /v1/profiles/{profileId}/balance-statements/{balanceId}/statement.json` | Get transactions | Yes |
+
+**Note:** Use `/v2/profiles` (not v1) to get all profiles the user has access to.
 
 ---
 
-## PSD2 Limitations (EU/UK entities)
+## SCA (Strong Customer Authentication)
 
-Due to PSD2 regulations, personal API tokens cannot:
-- Fund transfers
-- Access full balance statements without SCA
+The balance statement endpoint requires SCA for EU/UK profiles. The flow:
 
-The SCA key pair setup above addresses statement access.
+1. **Initial request returns 403** with `x-2fa-approval` header containing a one-time token (OTT)
+2. **Sign the OTT** with your private key using SHA256 + PKCS1v15
+3. **Retry request** with signed headers
+
+### Signing Example (bash)
+
+```bash
+# Get the OTT from the 403 response header
+OTT="<value from x-2fa-approval header>"
+
+# Sign with private key
+SIGNATURE=$(echo -n "$OTT" | openssl dgst -sha256 -sign wise_private.pem | base64 | tr -d '\n')
+
+# Retry with signed headers
+curl -H "Authorization: Bearer $TOKEN" \
+     -H "x-2fa-approval: $OTT" \
+     -H "X-Signature: $SIGNATURE" \
+     "https://api.wise.com/v1/profiles/{profileId}/balance-statements/{balanceId}/statement.json?..."
+```
+
+### SCA Session Duration
+
+Once authenticated, the SCA session is valid for **5 minutes**. Subsequent requests within this window don't need re-signing.
+
+---
+
+## Transaction Data Structure
+
+### Statement Response
+
+```json
+{
+  "accountHolder": {
+    "type": "BUSINESS",
+    "profileId": 25587793,
+    "businessName": "Fendops Limited",
+    "registrationNumber": "12742757"
+  },
+  "bankDetails": [{
+    "accountNumbers": [{"accountType": "IBAN", "accountNumber": "BE10 9672 5829 5404"}],
+    "bankCodes": [{"scheme": "Swift/BIC", "value": "TRWIBEB1XXX"}]
+  }],
+  "transactions": [...],
+  "startOfStatementBalance": {"value": 11470.65, "currency": "EUR"},
+  "endOfStatementBalance": {"value": 630.16, "currency": "EUR"}
+}
+```
+
+### Transaction Fields (all types)
+
+| Field | Description |
+|-------|-------------|
+| `type` | DEBIT or CREDIT |
+| `date` | ISO 8601 timestamp |
+| `amount.value` | Transaction amount (negative for debits) |
+| `amount.currency` | Currency code |
+| `totalFees.value` | Fees charged |
+| `runningBalance.value` | Balance after transaction |
+| `referenceNumber` | Unique ID (e.g., `TRANSFER-1950972714`) |
+| `details.type` | Transaction type: TRANSFER, DEPOSIT, CARD, CONVERSION, etc. |
+| `details.description` | Human-readable description |
+| `details.paymentReference` | Payment reference / memo |
+| `exchangeDetails` | FX rate info (when currency conversion occurs) |
+
+### Transaction Types
+
+#### TRANSFER (outgoing payments)
+
+```json
+{
+  "details": {
+    "type": "TRANSFER",
+    "description": "Sent money to Ombori AG",
+    "recipient": {
+      "name": "Ombori AG",
+      "bankAccount": "BE82967831096568"
+    },
+    "paymentReference": "Fendops UK/AG"
+  }
+}
+```
+
+#### DEPOSIT (incoming payments)
+
+```json
+{
+  "details": {
+    "type": "DEPOSIT",
+    "description": "Received money from KLARNA BANK AB",
+    "senderName": "KLARNA BANK AB",
+    "senderAccount": "(NDEASESSXXX) SE8595000099602608824831",
+    "paymentReference": "INVOL202458/1000087004"
+  }
+}
+```
+
+#### CARD (card transactions)
+
+```json
+{
+  "details": {
+    "type": "CARD",
+    "description": "Card transaction of 564.58 USD",
+    "merchant": {
+      "name": "Vouch Insurance",
+      "city": "VOUCH.US",
+      "country": "US",
+      "category": "6300 R Insurance Sales, Underwri"
+    },
+    "cardLastFourDigits": "3021",
+    "cardHolderFullName": "Andreas Hassellöf"
+  },
+  "exchangeDetails": {
+    "toAmount": {"value": 452.26, "currency": "USD"},
+    "fromAmount": {"value": 390.49, "currency": "EUR"},
+    "rate": 1.16350
+  }
+}
+```
+
+### All Transaction Types
+
+- `TRANSFER` - Outgoing payment
+- `DEPOSIT` - Incoming payment
+- `CARD` - Card purchase
+- `CONVERSION` - Currency exchange
+- `MONEY_ADDED` - Top-up
+- `INCOMING_CROSS_BALANCE` - Internal transfer in
+- `OUTGOING_CROSS_BALANCE` - Internal transfer out
+- `DIRECT_DEBIT` - Direct debit
+- `BALANCE_INTEREST` - Interest earned
+- `BALANCE_ADJUSTMENT` - Manual adjustment
+
+---
+
+## Reconciliation Value
+
+**Intercompany transfers are clearly identifiable:**
+- Recipient/sender name matches group entities
+- Bank accounts can be cross-referenced
+- Payment references provide context
+
+**Example intercompany flow detected:**
+```
+Ombori AG → Fendops Limited (€32,200, ref: 825840)
+Fendops Limited → Fendops Kft (€25,000, ref: Fendops Limited)
+```
+
+---
+
+## Query Parameters
+
+```
+GET /v1/profiles/{profileId}/balance-statements/{balanceId}/statement.json
+  ?currency=EUR
+  &intervalStart=2026-01-01T00:00:00.000Z
+  &intervalEnd=2026-02-03T23:59:59.999Z
+  &type=COMPACT
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `currency` | Currency code (must match balance) |
+| `intervalStart` | Start date (ISO 8601) |
+| `intervalEnd` | End date (ISO 8601) |
+| `type` | `COMPACT` or `FLAT` |
+
+**Limit:** Maximum 469 days between start and end.
+
+**Formats:** Replace `.json` with `.csv`, `.pdf`, `.xlsx`, `.xml` (CAMT.053), `.mt940`, or `.qif`.
 
 ---
 
@@ -158,4 +327,6 @@ The SCA key pair setup above addresses statement access.
 
 - [Wise API Getting Started](https://wise.com/help/articles/2958107/getting-started-with-the-api)
 - [Wise API Reference](https://docs.wise.com/api-reference)
-- [Auth & Security Guide](https://docs.wise.com/guides/developer/auth-and-security)
+- [Balance Statement API](https://docs.wise.com/api-reference/balance-statement)
+- [SCA Over API](https://docs.wise.com/guides/developer/auth-and-security/sca-over-api)
+- [SCA Signing Examples (GitHub)](https://github.com/transferwise/digital-signatures-examples)
