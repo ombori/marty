@@ -25,8 +25,9 @@ resource "kubernetes_secret" "wise_credentials" {
   data = merge(
     {
       "wise_private.pem" = base64decode(var.wise_private_key)
+      "WISE_API_TOKEN"   = var.wise_api_token
     },
-    jsondecode(var.wise_credentials)
+    jsondecode(var.wise_profile_ids)
   )
 
   type = "Opaque"

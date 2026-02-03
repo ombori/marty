@@ -74,8 +74,15 @@ variable "wise_private_key" {
   sensitive   = true
 }
 
-variable "wise_credentials" {
-  description = "JSON object with Wise tokens and profile IDs"
+variable "wise_api_token" {
+  description = "Wise API token (single token for all profiles)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "wise_profile_ids" {
+  description = "JSON object with Wise profile IDs"
   type        = string
   default     = "{}"
   sensitive   = true
