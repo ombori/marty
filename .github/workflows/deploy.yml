@@ -22,19 +22,20 @@ jobs:
           AGENT_NAME=$(grep '^name:' agent.yaml | sed 's/name: *//')
           echo "AGENT_NAME=${AGENT_NAME}" >> $GITHUB_OUTPUT
 
-          # Map org to domain
+          # Map org to domain and secret suffix
           ORG="${{ github.repository_owner }}"
           case "$ORG" in
-            ombori)    DOMAIN="ombori.com" ;;
-            fendops)   DOMAIN="fendops.com" ;;
-            gallyn-com) DOMAIN="gallyn.com" ;;
-            *)         DOMAIN="${ORG}.com" ;;
+            ombori)     DOMAIN="ombori.com";  SECRET_SUFFIX="OMBORI" ;;
+            fendops)    DOMAIN="fendops.com"; SECRET_SUFFIX="FENDOPS" ;;
+            gallyn-com) DOMAIN="gallyn.com";  SECRET_SUFFIX="GALLYN" ;;
+            *)          DOMAIN="${ORG}.com";  SECRET_SUFFIX=$(echo "$ORG" | tr '[:lower:]-' '[:upper:]_') ;;
           esac
           echo "DOMAIN=${DOMAIN}" >> $GITHUB_OUTPUT
+          echo "SECRET_SUFFIX=${SECRET_SUFFIX}" >> $GITHUB_OUTPUT
 
           echo "Agent: ${AGENT_NAME}"
           echo "Domain: ${DOMAIN}"
-          echo "Org: ${ORG}"
+          echo "Secret suffix: ${SECRET_SUFFIX}"
 
       - name: Build and push image
         env:
@@ -56,9 +57,15 @@ jobs:
           echo "IMAGE_TAG=${SHORT_SHA}" >> $GITHUB_ENV
 
       - name: Configure kubeconfig
+        env:
+          KUBECONFIG_OMBORI: ${{ secrets.KUBECONFIG_OMBORI }}
+          KUBECONFIG_FENDOPS: ${{ secrets.KUBECONFIG_FENDOPS }}
+          KUBECONFIG_GALLYN: ${{ secrets.KUBECONFIG_GALLYN }}
+          SECRET_SUFFIX: ${{ steps.config.outputs.SECRET_SUFFIX }}
         run: |
           mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+          VARNAME="KUBECONFIG_${SECRET_SUFFIX}"
+          echo "${!VARNAME}" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
 
       - name: Install kubectl
@@ -70,11 +77,18 @@ jobs:
       - name: Configure DNS and tunnel
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_DNS }}
-          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ZONE_ID_OMBORI: ${{ secrets.CLOUDFLARE_ZONE_ID_OMBORI }}
+          CLOUDFLARE_ZONE_ID_FENDOPS: ${{ secrets.CLOUDFLARE_ZONE_ID_FENDOPS }}
+          CLOUDFLARE_ZONE_ID_GALLYN: ${{ secrets.CLOUDFLARE_ZONE_ID_GALLYN }}
+          SECRET_SUFFIX: ${{ steps.config.outputs.SECRET_SUFFIX }}
           AGENT_NAME: ${{ steps.config.outputs.AGENT_NAME }}
           DOMAIN: ${{ steps.config.outputs.DOMAIN }}
         run: |
+          # Get zone ID from org-specific secret
+          ZONE_VARNAME="CLOUDFLARE_ZONE_ID_${SECRET_SUFFIX}"
+          CF_ZONE_ID="${!ZONE_VARNAME}"
+
           # Get tunnel ID from existing k8s-dso record
           TUNNEL_TARGET=$(curl -sf -X GET \
             "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records?name=k8s-dso.${DOMAIN}" \
