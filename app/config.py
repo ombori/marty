@@ -30,8 +30,9 @@ class Settings(BaseSettings):
     spectre_api_url: str = "http://spectre.agents.svc.cluster.local"
     spectre_api_key: str = ""
 
-    # Slack
-    slack_webhook_url: str = ""
+    # Slack App
+    slack_bot_token: str = ""
+    slack_signing_secret: str = ""
     slack_channel: str = "#accounting-alerts"
 
     # LLM (for matching)

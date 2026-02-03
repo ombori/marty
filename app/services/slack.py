@@ -1,10 +1,11 @@
-"""Slack notification service."""
+"""Slack notification service using Slack App API."""
 
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
 
-import httpx
+from slack_sdk.errors import SlackApiError
+from slack_sdk.web.async_client import AsyncWebClient
 
 from app.config import settings
 from app.services.reconcile import ReconciliationResult
@@ -32,20 +33,28 @@ class SlackNotifier:
 
     def __init__(
         self,
-        webhook_url: str | None = None,
+        bot_token: str | None = None,
         channel: str | None = None,
         spectre_base_url: str = "https://spectre.example.com",
     ):
         """Initialize Slack notifier.
 
         Args:
-            webhook_url: Slack webhook URL
+            bot_token: Slack bot token (xoxb-...)
             channel: Default channel (can be overridden per message)
             spectre_base_url: Base URL for Spectre links
         """
-        self.webhook_url = webhook_url or settings.slack_webhook_url
+        self.bot_token = bot_token or settings.slack_bot_token
         self.channel = channel or settings.slack_channel
         self.spectre_base_url = spectre_base_url
+        self._client: AsyncWebClient | None = None
+
+    @property
+    def client(self) -> AsyncWebClient:
+        """Get or create Slack client."""
+        if self._client is None:
+            self._client = AsyncWebClient(token=self.bot_token)
+        return self._client
 
     async def send_message(self, message: SlackMessage) -> bool:
         """Send a message to Slack.
@@ -56,25 +65,28 @@ class SlackNotifier:
         Returns:
             True if successful
         """
-        if not self.webhook_url:
-            logger.warning("Slack webhook URL not configured")
+        if not self.bot_token:
+            logger.warning("Slack bot token not configured")
             return False
 
-        payload = {"text": message.text}
-        if message.blocks:
-            payload["blocks"] = message.blocks
-        if message.channel:
-            payload["channel"] = message.channel
+        channel = message.channel or self.channel
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    self.webhook_url,
-                    json=payload,
-                    timeout=10.0,
+            if message.blocks:
+                await self.client.chat_postMessage(
+                    channel=channel,
+                    text=message.text,
+                    blocks=message.blocks,
                 )
-                response.raise_for_status()
-                return True
+            else:
+                await self.client.chat_postMessage(
+                    channel=channel,
+                    text=message.text,
+                )
+            return True
+        except SlackApiError as e:
+            logger.error(f"Failed to send Slack message: {e.response['error']}")
+            return False
         except Exception as e:
             logger.error(f"Failed to send Slack message: {e}")
             return False
@@ -106,7 +118,7 @@ class SlackNotifier:
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": "📊 Daily Reconciliation Digest",
+                    "text": "Daily Reconciliation Digest",
                     "emoji": True,
                 },
             },
@@ -179,7 +191,6 @@ class SlackNotifier:
             )
         tx_text = "\n".join(tx_lines) if tx_lines else "None"
 
-        emoji = "🚨" if threshold_exceeded else "⚠️"
         urgency = "HIGH" if threshold_exceeded else "ATTENTION"
 
         blocks = [
@@ -187,7 +198,7 @@ class SlackNotifier:
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"{emoji} Discrepancy Alert - {entity_name}",
+                    "text": f"Discrepancy Alert - {entity_name}",
                     "emoji": True,
                 },
             },
@@ -244,16 +255,16 @@ class SlackNotifier:
         matched = result.exact_matches + result.fuzzy_matches + result.llm_matches
         match_rate = (matched / total * 100) if total > 0 else 0
 
-        status_emoji = "✅" if result.unmatched == 0 else "📋"
+        status_text = "Complete" if result.unmatched == 0 else "Needs Review"
         if result.errors:
-            status_emoji = "⚠️"
+            status_text = "Completed with Errors"
 
         blocks = [
             {
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"{status_emoji} Reconciliation Complete - {result.entity_name}",
+                    "text": f"Reconciliation {status_text} - {result.entity_name}",
                     "emoji": True,
                 },
             },
@@ -357,7 +368,7 @@ class SlackNotifier:
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"🔴 Reconciliation Error - {entity_name}",
+                    "text": f"Reconciliation Error - {entity_name}",
                     "emoji": True,
                 },
             },
@@ -393,7 +404,7 @@ class MockSlackNotifier(SlackNotifier):
 
     def __init__(self):
         """Initialize mock notifier."""
-        super().__init__(webhook_url="mock://webhook")
+        super().__init__(bot_token="xoxb-mock-token")
         self.messages: list[SlackMessage] = []
 
     async def send_message(self, message: SlackMessage) -> bool:

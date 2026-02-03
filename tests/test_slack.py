@@ -110,9 +110,9 @@ class TestSlackNotifier:
         assert "Ombori AG" in message.text
 
     @pytest.mark.asyncio
-    async def test_no_webhook_configured(self):
-        """Test that missing webhook URL is handled gracefully."""
-        notifier = SlackNotifier(webhook_url="")
+    async def test_no_bot_token_configured(self):
+        """Test that missing bot token is handled gracefully."""
+        notifier = SlackNotifier(bot_token="")
 
         result = await notifier.send_daily_digest(
             pending_count=10,
