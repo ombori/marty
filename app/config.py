@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     slack_webhook_url: str = ""
     slack_channel: str = "#accounting-alerts"
 
+    # LLM (for matching)
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""  # For embeddings
+
     @property
     def database_url(self) -> str:
         """SQLAlchemy database URL."""

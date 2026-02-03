@@ -8,3 +8,4 @@ sqlalchemy[asyncio]==2.0.25
 alembic==1.13.1
 cryptography==42.0.2
 psycopg2-binary==2.9.9
+openai==1.12.0

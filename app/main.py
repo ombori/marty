@@ -3,9 +3,13 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from .api import reconcile_router
 from .health import get_health_status
 
-app = FastAPI(title="Agent", version="1.0.0")
+app = FastAPI(title="Marty - Banking Reconciliation Agent", version="1.0.0")
+
+# Include routers
+app.include_router(reconcile_router)
 
 
 @app.get("/")
