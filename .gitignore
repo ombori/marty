@@ -1,3 +1,9 @@
+# Secrets
+*.pem
+.env
+.env.*
+secrets/
+
 # Terraform
 .terraform/
 *.tfstate
