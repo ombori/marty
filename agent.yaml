@@ -1,0 +1,4 @@
+# Agent Configuration
+# This is the ONLY file you need to edit when creating a new agent
+
+name: my-agent

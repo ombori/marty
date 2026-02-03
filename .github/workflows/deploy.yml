@@ -1,0 +1,177 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on:
+      group: dso-${{ github.repository_owner == 'gallyn-com' && 'gallyn' || github.repository_owner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set environment from config
+        id: config
+        run: |
+          # Read agent name from agent.yaml
+          AGENT_NAME=$(grep '^name:' agent.yaml | sed 's/name: *//')
+          echo "AGENT_NAME=${AGENT_NAME}" >> $GITHUB_OUTPUT
+
+          # Map org to domain
+          ORG="${{ github.repository_owner }}"
+          case "$ORG" in
+            ombori)    DOMAIN="ombori.com" ;;
+            fendops)   DOMAIN="fendops.com" ;;
+            gallyn-com) DOMAIN="gallyn.com" ;;
+            *)         DOMAIN="${ORG}.com" ;;
+          esac
+          echo "DOMAIN=${DOMAIN}" >> $GITHUB_OUTPUT
+
+          echo "Agent: ${AGENT_NAME}"
+          echo "Domain: ${DOMAIN}"
+          echo "Org: ${ORG}"
+
+      - name: Build and push image
+        env:
+          AGENT_NAME: ${{ steps.config.outputs.AGENT_NAME }}
+          INTERNAL_REGISTRY: zot.registry.svc.cluster.local:5000
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login ${INTERNAL_REGISTRY} -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+
+          docker build \
+            -t ${INTERNAL_REGISTRY}/${AGENT_NAME}:${SHORT_SHA} \
+            -t ${INTERNAL_REGISTRY}/${AGENT_NAME}:latest \
+            .
+
+          docker push ${INTERNAL_REGISTRY}/${AGENT_NAME}:${SHORT_SHA}
+          docker push ${INTERNAL_REGISTRY}/${AGENT_NAME}:latest
+
+          echo "IMAGE_TAG=${SHORT_SHA}" >> $GITHUB_ENV
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Configure DNS and tunnel
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_DNS }}
+          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AGENT_NAME: ${{ steps.config.outputs.AGENT_NAME }}
+          DOMAIN: ${{ steps.config.outputs.DOMAIN }}
+        run: |
+          # Get tunnel ID from existing k8s-dso record
+          TUNNEL_TARGET=$(curl -sf -X GET \
+            "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records?name=k8s-dso.${DOMAIN}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json" | jq -r '.result[0].content')
+
+          TUNNEL_ID=$(echo "${TUNNEL_TARGET}" | cut -d. -f1)
+          echo "Tunnel: ${TUNNEL_ID}"
+
+          # Create/update DNS record
+          RECORD_DATA=$(curl -s -X GET \
+            "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records?name=${AGENT_NAME}.${DOMAIN}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json")
+
+          RECORD_ID=$(echo "${RECORD_DATA}" | jq -r '.result[0].id // empty')
+
+          if [ -n "$RECORD_ID" ] && [ "$RECORD_ID" != "null" ]; then
+            curl -sf -X PUT \
+              "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records/${RECORD_ID}" \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"type\":\"CNAME\",\"name\":\"${AGENT_NAME}\",\"content\":\"${TUNNEL_TARGET}\",\"ttl\":1,\"proxied\":true}"
+          else
+            curl -sf -X POST \
+              "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records" \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"type\":\"CNAME\",\"name\":\"${AGENT_NAME}\",\"content\":\"${TUNNEL_TARGET}\",\"ttl\":1,\"proxied\":true}"
+          fi
+
+          # Add tunnel ingress rule if not exists
+          CURRENT_CONFIG=$(curl -sf -X GET \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/configurations" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json")
+
+          HOSTNAME_EXISTS=$(echo "${CURRENT_CONFIG}" | jq -r ".result.config.ingress[] | select(.hostname == \"${AGENT_NAME}.${DOMAIN}\") | .hostname // empty")
+
+          if [ -z "$HOSTNAME_EXISTS" ]; then
+            EXISTING_RULES=$(echo "${CURRENT_CONFIG}" | jq '.result.config.ingress | map(select(.service != "http_status:404"))')
+            NEW_CONFIG=$(jq -n \
+              --argjson existing "${EXISTING_RULES}" \
+              --arg hostname "${AGENT_NAME}.${DOMAIN}" \
+              --arg service "http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80" \
+              '{config: {ingress: ($existing + [{"hostname": $hostname, "service": $service}, {"service": "http_status:404"}])}}')
+
+            curl -sf -X PUT \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/configurations" \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "${NEW_CONFIG}"
+          fi
+
+          echo "Configured: https://${AGENT_NAME}.${DOMAIN}"
+
+      - name: Create image pull secret
+        run: |
+          kubectl get secret registry-pull-secret -n agents 2>/dev/null || \
+            kubectl get secret registry-pull-secret -n registry -o yaml | \
+            sed 's/namespace: registry/namespace: agents/' | \
+            kubectl apply -f -
+
+      - name: Terraform Deploy
+        working-directory: terraform
+        env:
+          TF_VAR_agent_name: ${{ steps.config.outputs.AGENT_NAME }}
+          TF_VAR_domain: ${{ steps.config.outputs.DOMAIN }}
+          TF_VAR_image_tag: ${{ env.IMAGE_TAG }}
+        run: |
+          if ! command -v terraform &> /dev/null; then
+            curl -sfL https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip -o /tmp/terraform.zip
+            unzip -o /tmp/terraform.zip -d /tmp
+            export PATH="/tmp:$PATH"
+          fi
+
+          terraform init
+
+          # Import existing resources
+          terraform import kubernetes_deployment.app agents/${TF_VAR_agent_name} 2>/dev/null || true
+          terraform import kubernetes_service.app agents/${TF_VAR_agent_name} 2>/dev/null || true
+          terraform import kubernetes_ingress_v1.app agents/${TF_VAR_agent_name} 2>/dev/null || true
+          terraform import kubernetes_network_policy.app agents/${TF_VAR_agent_name}-allow-ingress 2>/dev/null || true
+
+          terraform apply -auto-approve
+
+      - name: Verify Deployment
+        env:
+          AGENT_NAME: ${{ steps.config.outputs.AGENT_NAME }}
+        run: |
+          kubectl rollout status deployment/${AGENT_NAME} -n agents --timeout=300s
+          kubectl get pods -n agents -l app.kubernetes.io/name=${AGENT_NAME}
+
+      - name: Health Check
+        env:
+          AGENT_NAME: ${{ steps.config.outputs.AGENT_NAME }}
+          DOMAIN: ${{ steps.config.outputs.DOMAIN }}
+        run: |
+          sleep 10
+          curl -sf https://${AGENT_NAME}.${DOMAIN}/health || echo "Health check pending"
