@@ -158,6 +158,8 @@ jobs:
           TF_VAR_agent_name: ${{ steps.config.outputs.AGENT_NAME }}
           TF_VAR_domain: ${{ steps.config.outputs.DOMAIN }}
           TF_VAR_image_tag: ${{ env.IMAGE_TAG }}
+          TF_VAR_wise_private_key: ${{ secrets.WISE_PRIVATE_KEY }}
+          TF_VAR_wise_credentials: ${{ secrets.WISE_CREDENTIALS }}
         run: |
           if ! command -v terraform &> /dev/null; then
             curl -sfL https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip -o /tmp/terraform.zip
@@ -172,6 +174,7 @@ jobs:
           terraform import kubernetes_service.app agents/${TF_VAR_agent_name} 2>/dev/null || true
           terraform import kubernetes_ingress_v1.app agents/${TF_VAR_agent_name} 2>/dev/null || true
           terraform import kubernetes_network_policy.app agents/${TF_VAR_agent_name}-allow-ingress 2>/dev/null || true
+          terraform import 'kubernetes_secret.wise_credentials[0]' agents/${TF_VAR_agent_name}-wise-credentials 2>/dev/null || true
 
           terraform apply -auto-approve
 

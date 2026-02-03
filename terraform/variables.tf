@@ -65,3 +65,18 @@ variable "memory_limit" {
   type    = string
   default = "512Mi"
 }
+
+# Wise API credentials (optional - only for agents that need Wise integration)
+variable "wise_private_key" {
+  description = "Wise SCA private key (base64 encoded)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "wise_credentials" {
+  description = "JSON object with Wise tokens and profile IDs"
+  type        = string
+  default     = "{}"
+  sensitive   = true
+}

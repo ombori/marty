@@ -12,6 +12,26 @@ locals {
   internal_registry = "zot.registry.svc.cluster.local:5000"
 }
 
+# Wise API credentials secret (only created if wise_private_key is provided)
+resource "kubernetes_secret" "wise_credentials" {
+  count = var.wise_private_key != "" ? 1 : 0
+
+  metadata {
+    name      = "${var.agent_name}-wise-credentials"
+    namespace = var.namespace
+    labels    = local.labels
+  }
+
+  data = merge(
+    {
+      "wise_private.pem" = base64decode(var.wise_private_key)
+    },
+    jsondecode(var.wise_credentials)
+  )
+
+  type = "Opaque"
+}
+
 resource "kubernetes_deployment" "app" {
   metadata {
     name      = var.agent_name
@@ -68,6 +88,23 @@ resource "kubernetes_deployment" "app" {
             }
           }
 
+          env_from {
+            secret_ref {
+              name     = "${var.agent_name}-wise-credentials"
+              optional = true
+            }
+          }
+
+          # Mount Wise private key as file if secret exists
+          dynamic "volume_mount" {
+            for_each = var.wise_private_key != "" ? [1] : []
+            content {
+              name       = "wise-credentials"
+              mount_path = "/secrets/wise"
+              read_only  = true
+            }
+          }
+
           resources {
             requests = {
               cpu    = var.cpu_request
@@ -111,6 +148,21 @@ resource "kubernetes_deployment" "app" {
 
         security_context {
           fs_group = 1000
+        }
+
+        # Volume for Wise private key
+        dynamic "volume" {
+          for_each = var.wise_private_key != "" ? [1] : []
+          content {
+            name = "wise-credentials"
+            secret {
+              secret_name = "${var.agent_name}-wise-credentials"
+              items {
+                key  = "wise_private.pem"
+                path = "wise_private.pem"
+              }
+            }
+          }
         }
       }
     }
