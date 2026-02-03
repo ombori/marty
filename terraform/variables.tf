@@ -87,3 +87,47 @@ variable "wise_profile_ids" {
   default     = "{}"
   sensitive   = true
 }
+
+# LLM API keys
+variable "anthropic_api_key" {
+  description = "Anthropic API key for LLM matching"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "openai_api_key" {
+  description = "OpenAI API key for embeddings"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# Slack App credentials
+variable "slack_bot_token" {
+  description = "Slack bot token (xoxb-...)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "slack_signing_secret" {
+  description = "Slack signing secret for request verification"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# Spectre API
+variable "spectre_api_url" {
+  description = "Spectre API base URL"
+  type        = string
+  default     = "http://spectre.agents.svc.cluster.local"
+}
+
+variable "spectre_api_key" {
+  description = "Spectre API key"
+  type        = string
+  default     = ""
+  sensitive   = true
+}

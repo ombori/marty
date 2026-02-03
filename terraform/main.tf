@@ -33,6 +33,60 @@ resource "kubernetes_secret" "wise_credentials" {
   type = "Opaque"
 }
 
+# LLM API credentials (Anthropic + OpenAI)
+resource "kubernetes_secret" "llm_credentials" {
+  count = var.anthropic_api_key != "" || var.openai_api_key != "" ? 1 : 0
+
+  metadata {
+    name      = "${var.agent_name}-llm-credentials"
+    namespace = var.namespace
+    labels    = local.labels
+  }
+
+  data = {
+    ANTHROPIC_API_KEY = var.anthropic_api_key
+    OPENAI_API_KEY    = var.openai_api_key
+  }
+
+  type = "Opaque"
+}
+
+# Slack App credentials
+resource "kubernetes_secret" "slack_credentials" {
+  count = var.slack_bot_token != "" ? 1 : 0
+
+  metadata {
+    name      = "${var.agent_name}-slack-credentials"
+    namespace = var.namespace
+    labels    = local.labels
+  }
+
+  data = {
+    SLACK_BOT_TOKEN      = var.slack_bot_token
+    SLACK_SIGNING_SECRET = var.slack_signing_secret
+  }
+
+  type = "Opaque"
+}
+
+# Spectre API credentials
+resource "kubernetes_secret" "spectre_credentials" {
+  count = var.spectre_api_key != "" ? 1 : 0
+
+  metadata {
+    name      = "${var.agent_name}-spectre-credentials"
+    namespace = var.namespace
+    labels    = local.labels
+  }
+
+  data = {
+    SPECTRE_API_URL = var.spectre_api_url
+    SPECTRE_API_KEY = var.spectre_api_key
+  }
+
+  type = "Opaque"
+}
+
 resource "kubernetes_deployment" "app" {
   metadata {
     name      = var.agent_name
@@ -92,6 +146,27 @@ resource "kubernetes_deployment" "app" {
           env_from {
             secret_ref {
               name     = "${var.agent_name}-wise-credentials"
+              optional = true
+            }
+          }
+
+          env_from {
+            secret_ref {
+              name     = "${var.agent_name}-llm-credentials"
+              optional = true
+            }
+          }
+
+          env_from {
+            secret_ref {
+              name     = "${var.agent_name}-slack-credentials"
+              optional = true
+            }
+          }
+
+          env_from {
+            secret_ref {
+              name     = "${var.agent_name}-spectre-credentials"
               optional = true
             }
           }
