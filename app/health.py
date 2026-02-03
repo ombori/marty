@@ -1,16 +1,16 @@
 """Health check endpoints."""
 
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Any
 
 import asyncpg
-import redis.asyncio as redis
 import httpx
+import redis.asyncio as redis
 
 from .config import settings
 
 
-async def check_postgresql() -> Dict[str, Any]:
+async def check_postgresql() -> dict[str, Any]:
     """Check PostgreSQL connectivity."""
     try:
         conn = await asyncio.wait_for(
@@ -30,7 +30,7 @@ async def check_postgresql() -> Dict[str, Any]:
         return {"status": "unhealthy", "error": str(e)}
 
 
-async def check_redis() -> Dict[str, Any]:
+async def check_redis() -> dict[str, Any]:
     """Check Redis connectivity."""
     try:
         client = redis.Redis(
@@ -47,7 +47,7 @@ async def check_redis() -> Dict[str, Any]:
         return {"status": "unhealthy", "error": str(e)}
 
 
-async def check_qdrant() -> Dict[str, Any]:
+async def check_qdrant() -> dict[str, Any]:
     """Check Qdrant connectivity."""
     try:
         url = f"http://{settings.qdrant_host}:{settings.qdrant_port}/readyz"
@@ -64,7 +64,7 @@ async def check_qdrant() -> Dict[str, Any]:
         return {"status": "unhealthy", "error": str(e)}
 
 
-async def get_health_status() -> Dict[str, Any]:
+async def get_health_status() -> dict[str, Any]:
     """Get overall health status."""
     postgres, redis_status, qdrant = await asyncio.gather(
         check_postgresql(),
@@ -81,9 +81,7 @@ async def get_health_status() -> Dict[str, Any]:
     if isinstance(qdrant, Exception):
         qdrant = {"status": "unhealthy", "error": str(qdrant)}
 
-    all_healthy = all(
-        s.get("status") == "healthy" for s in [postgres, redis_status, qdrant]
-    )
+    all_healthy = all(s.get("status") == "healthy" for s in [postgres, redis_status, qdrant])
 
     return {
         "status": "healthy" if all_healthy else "degraded",
