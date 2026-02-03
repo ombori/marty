@@ -33,12 +33,17 @@ These secrets must be set at the **organization level**:
 
 | Secret | Description |
 |--------|-------------|
-| `KUBECONFIG` | Base64-encoded kubeconfig for the cluster |
+| `KUBECONFIG_<ORG>` | Base64-encoded kubeconfig (e.g., `KUBECONFIG_OMBORI`, `KUBECONFIG_GALLYN`) |
+| `CLOUDFLARE_ZONE_ID_<ORG>` | Zone ID for the domain (e.g., `CLOUDFLARE_ZONE_ID_OMBORI`) |
+| `CLOUDFLARE_API_TOKEN_DNS` | Cloudflare API token (shared) |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID (shared) |
 | `REGISTRY_USERNAME` | Registry username (usually `admin`) |
 | `REGISTRY_PASSWORD` | Registry password |
-| `CLOUDFLARE_API_TOKEN_DNS` | Cloudflare API token |
-| `CLOUDFLARE_ZONE_ID` | Cloudflare zone ID for the domain |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
+
+**Org suffix mapping:**
+- `ombori` → `_OMBORI`
+- `fendops` → `_FENDOPS`
+- `gallyn-com` → `_GALLYN`
 
 ## Project Structure
 
